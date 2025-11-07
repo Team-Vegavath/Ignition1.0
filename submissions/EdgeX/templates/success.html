@@ -1,0 +1,98 @@
+{% extends "layout.html" %}
+{% block content %}
+<div class="card mx-auto shadow p-5 animate-fadeInUp" style="max-width:900px;">
+    <h3 class="text-center mb-4" style="color: #FF6B35; font-size: 2.5rem;">⏳ Upload Progress</h3>
+
+    <!-- Progress bar -->
+    <div class="progress mb-4" style="height:32px;">
+        <div id="progressBar" class="progress-bar progress-bar-striped progress-bar-animated" 
+             role="progressbar" style="width: 0%;">
+            <span style="font-weight: 600;">0%</span>
+        </div>
+    </div>
+
+    <!-- Log output -->
+    <div id="logBox" style="height: 320px; overflow-y: auto; margin-bottom: 20px;">
+        <div id="log">Connecting to server...</div>
+    </div>
+
+    <!-- Back button -->
+    <div class="text-center mt-4">
+        <a href="/" id="backBtn" class="btn btn-primary py-3 px-5" style="display:none;">⬅️ Back to Verify</a>
+    </div>
+</div>
+
+<script>
+const uploadId = "{{ upload_id }}";
+const eventSource = new EventSource(`/events/${uploadId}`);
+
+let totalFiles = 0;
+let uploaded = 0;
+const bar = document.getElementById('progressBar');
+const logDiv = document.getElementById('log');
+const backBtn = document.getElementById('backBtn');
+
+function log(msg, color="#e6edf3") {
+    const p = document.createElement('div');
+    p.style.color = color;
+    p.style.marginBottom = '4px';
+    p.textContent = msg;
+    logDiv.appendChild(p);
+    logDiv.scrollTop = logDiv.scrollHeight;
+}
+
+// ---- Event Listeners ----
+
+// Info event — total files
+eventSource.addEventListener('info', e => {
+    const data = e.data.replace(/"/g, "");
+    log("ℹ️ " + data, "#00B7EB");
+    const match = data.match(/(\d+)/);
+    if (match) totalFiles = parseInt(match[1]);
+});
+
+// Successful upload per file
+eventSource.addEventListener('upload_done', e => {
+    const d = JSON.parse(e.data);
+    uploaded = d.index;
+    const percent = totalFiles ? Math.round((uploaded / totalFiles) * 100) : 0;
+    bar.style.width = percent + "%";
+    bar.innerHTML = `<span style="font-weight: 600;">${percent}%</span>`;
+    log(`✅ Uploaded: ${d.file} (${uploaded}/${totalFiles})`, "#00B7EB");
+});
+
+// GitHub log (extra details)
+eventSource.addEventListener('github_log', e => {
+    const d = JSON.parse(e.data);
+    const url = d.url ? d.url : "(no link)";
+    log(`📘 GitHub API → ${d.status} | ${d.file} | ${url}`, "#8b5cf6");
+});
+
+// Error during upload
+eventSource.addEventListener('upload_error', e => {
+    const d = JSON.parse(e.data);
+    log(`❌ Error uploading ${d.file} (HTTP ${d.status})`, "#FF5EAE");
+});
+
+// Finished
+eventSource.addEventListener('finished', e => {
+    const msg = e.data.replace(/"/g, "");
+    log(`🎉 ${msg}`, "#00B7EB");
+    bar.style.width = "100%";
+    bar.innerHTML = `<span style="font-weight: 600;">100%</span>`;
+    setTimeout(() => {
+        backBtn.style.display = "inline-block";
+    }, 800);
+});
+
+// Any exceptions
+eventSource.addEventListener('error', e => {
+    log(`⚠️ Error: ${e.data}`, "#FF5EAE");
+});
+
+eventSource.addEventListener('closed', e => {
+    eventSource.close();
+    log("🔒 Connection closed.", "#FFD580");
+});
+</script>
+{% endblock %}
