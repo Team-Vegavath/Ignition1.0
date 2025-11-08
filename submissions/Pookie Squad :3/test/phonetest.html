@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html>
+  <body>
+    <h2>Helmet Telemetry Logger</h2>
+    <p>Make sure to allow motion + location permissions!</p>
+    <script>
+      const SERVER_URL = "http://192.168.1.100:5000/data"; // your server
+
+      async function getLocation() {
+        return new Promise((resolve) => {
+          navigator.geolocation.getCurrentPosition((pos) => {
+            resolve({
+              lat: pos.coords.latitude,
+              lon: pos.coords.longitude,
+              speed: pos.coords.speed
+            });
+          });
+        });
+      }
+
+      window.addEventListener("devicemotion", async (e) => {
+        const gps = await getLocation();
+        const data = {
+          accel: e.acceleration,
+          rotation: e.rotationRate,
+          compass: window.alpha, // captured below
+          light: window.ambientLight,
+          temp: null,
+          gps,
+          timestamp: Date.now(),
+        };
+        fetch(SERVER_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(data),
+        });
+      });
+
+      window.addEventListener("deviceorientationabsolute", (e) => {
+        window.alpha = e.alpha; // compass heading
+      });
+
+      try {
+        navigator.permissions.query({ name: "ambient-light-sensor" });
+        const sensor = new AmbientLightSensor();
+        sensor.onreading = () => (window.ambientLight = sensor.illuminance);
+        sensor.start();
+      } catch (err) {
+        console.warn("Light sensor not supported:", err);
+      }
+    </script>
+  </body>
+</html>
