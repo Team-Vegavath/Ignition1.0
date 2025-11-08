@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Rider Monitoring Dashboard</title>
+
+<!-- Tailwind CDN for quick styling -->
+<script src="https://cdn.tailwindcss.com"></script>
+<!-- Chart.js -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<!-- Leaflet for map (optional if GPS used) -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+
+<style>
+  body { background: radial-gradient(circle at top, #071029, #071a2a); color: #e6f7ff; font-family: Poppins, sans-serif; }
+  .card { background: rgba(255,255,255,0.04); border-radius: 12px; padding: 16px; box-shadow: 0 6px 20px rgba(0,0,0,0.5); }
+  .gauge { transform: rotate(-90deg); width: 120px; height: 120px; }
+  .gauge .bar { stroke-linecap: round; transition: stroke-dasharray 0.5s ease, stroke 0.4s ease; }
+  #map { height: 220px; border-radius: 8px; overflow: hidden; }
+  .btn { background:#06b6d4; color:#012; padding:8px 14px; border-radius:8px; font-weight:600; }
+</style>
+</head>
+<body class="min-h-screen flex items-start justify-center p-6">
+
+<div class="w-full max-w-6xl">
+  <header class="flex items-center justify-between mb-6">
+    <div>
+      <h1 class="text-3xl font-bold text-cyan-300">Rider Monitoring Dashboard</h1>
+      <p class="text-sm text-slate-300">Live: MPU6050 + Pulse Sensor + (optional) GPS — Local WebSocket (no cloud)</p>
+    </div>
+    <div class="flex gap-3">
+      <button id="connectBtn" class="btn">🔗 Connect</button>
+      <button id="downloadBtn" class="btn">📥 Download CSV</button>
+    </div>
+  </header>
+
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+    <!-- Left column: values -->
+    <div class="col-span-1 space-y-4">
+      <div class="card">
+        <h3 class="font-semibold text-lg">Tilt Angle</h3>
+        <div class="text-3xl font-bold text-cyan-200" id="tilt">-- °</div>
+        <div class="text-sm text-slate-300 mt-1">Pitch / seat tilt</div>
+      </div>
+
+      <div class="card">
+        <h3 class="font-semibold text-lg">Total Acceleration</h3>
+        <div class="text-3xl font-bold text-amber-300" id="accel">-- g</div>
+        <div class="text-sm text-slate-300 mt-1">Magnitude of acceleration vector</div>
+      </div>
+
+      <div class="card">
+        <h3 class="font-semibold text-lg">Braking (ax)</h3>
+        <div class="text-3xl font-bold text-rose-300" id="brake">-- m/s²</div>
+        <div class="text-sm text-slate-300 mt-1">Forward/back decel (proxy)</div>
+      </div>
+
+      <div class="card">
+        <h3 class="font-semibold text-lg">Y-Change (proxy)</h3>
+        <div class="text-3xl font-bold text-lime-200" id="ychange">--</div>
+        <div class="text-sm text-slate-300 mt-1">Integrated Y-change (heuristic)</div>
+      </div>
+    </div>
+
+    <!-- middle column: gauge -->
+    <div class="col-span-1 flex flex-col gap-4">
+      <div class="card flex items-center justify-between">
+        <div>
+          <h3 class="font-semibold text-lg">Riding Probability</h3>
+          <div class="text-5xl font-extrabold mt-2" id="probText">--%</div>
+          <div class="text-sm text-slate-300 mt-1" id="activity">Analyzing...</div>
+        </div>
+        <div class="gauge-container">
+          <svg class="gauge" viewBox="0 0 36 36">
+            <path class="bg" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="2"/>
+            <path id="gaugeBar" class="bar" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="#06b6d4" stroke-width="2" stroke-dasharray="0,100"/>
+          </svg>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3 class="font-semibold text-lg">Heart Rate (BPM)</h3>
+        <div class="text-4xl font-bold text-pink-300" id="heart">--</div>
+        <div class="text-sm text-slate-300 mt-1">Analog pulse sensor</div>
+      </div>
+
+      <div class="card">
+        <h3 class="font-semibold text-lg">Live Probability (history)</h3>
+        <canvas id="probChart" height="150"></canvas>
+      </div>
+    </div>
+
+    <!-- right column: map & details -->
+    <div class="col-span-1 space-y-4">
+      <div class="card">
+        <h3 class="font-semibold text-lg">Map (GPS)</h3>
+        <div id="map" class="mt-2"></div>
+        <div class="mt-2 text-sm text-slate-300" id="gpsInfo">Lat: -- , Lon: -- , Speed: -- m/s</div>
+      </div>
+
+      <div class="card">
+        <h3 class="font-semibold text-lg">Latest JSON</h3>
+        <pre id="jsonOut" style="max-height:140px; overflow:auto; font-size:12px; color:#cfeef7">--</pre>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  // WebSocket default (ESP32 local AP)
+  let WS_URL = "ws://192.168.4.1:81";
+  let socket = null;
+  let connected = false;
+  let recorded = []; // store data points for CSV
+  let probHistory = Array(40).fill(0);
+
+  // map init (Leaflet)
+  let map = L.map('map').setView([12.9716,77.5946], 13);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '&copy; OSM contributors' }).addTo(map);
+  let marker = L.marker([12.9716,77.5946]).addTo(map);
+
+  // Chart.js prob chart
+  const ctx = document.getElementById('probChart').getContext('2d');
+  const probChart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: probHistory.map((_,i)=>""), datasets: [{
+        label: 'Probability %',
+        data: probHistory,
+        borderColor: '#06b6d4',
+        borderWidth: 2, fill:false, tension:0.3
+      }]
+    },
+    options: { scales: { y: { min:0, max:100 } }, plugins:{legend:{display:false}} }
+  });
+
+  function connectSocket(url) {
+    if (socket) { socket.close(); socket = null; }
+    socket = new WebSocket(url);
+    socket.onopen = () => { connected = true; console.log("WS open"); alert("Connected to ESP32"); };
+    socket.onerror = (e) => { console.log("WS error", e); };
+    socket.onclose = () => { connected = false; console.log("WS closed"); };
+    socket.onmessage = (ev) => { try { const data = JSON.parse(ev.data); onData(data); } catch(e) { console.error(e); } };
+  }
+
+  document.getElementById('connectBtn').addEventListener('click', () => {
+    const ip = prompt("Enter ESP32 WebSocket URL (example: ws://192.168.4.1:81):", WS_URL);
+    if (!ip) return;
+    WS_URL = ip;
+    connectSocket(WS_URL);
+  });
+
+  // download CSV
+  document.getElementById('downloadBtn').addEventListener('click', () => {
+    if (recorded.length === 0) { alert("No data to download"); return; }
+    const header = Object.keys(recorded[0]).join(',') + '\n';
+    const rows = recorded.map(r => Object.values(r).join(',')).join('\n');
+    const csv = header + rows;
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'esp32_data.csv'; a.click();
+    URL.revokeObjectURL(url);
+  });
+
+  function onData(d) {
+    // update UI fields
+    document.getElementById('tilt').innerText = (d.tilt !== undefined ? d.tilt.toFixed(2) + ' °' : '--');
+    document.getElementById('accel').innerText = (d.accel !== undefined ? d.accel.toFixed(2) + ' g' : '--');
+    document.getElementById('brake').innerText = (d.brake !== undefined ? (d.brake).toFixed(2) + ' m/s²' : '--');
+    document.getElementById('ychange').innerText = (d.ychange !== undefined ? d.ychange.toFixed(3) : '--');
+    document.getElementById('heart').innerText = (d.heart !== undefined ? d.heart : '--');
+    document.getElementById('jsonOut').innerText = JSON.stringify(d, null, 2);
+
+    // map
+    if (d.lat && d.lon && d.lat !== 0 && d.lon !== 0) {
+      marker.setLatLng([d.lat, d.lon]);
+      map.setView([d.lat, d.lon], 15);
+      document.getElementById('gpsInfo').innerText = Lat: ${d.lat.toFixed(6)} , Lon: ${d.lon.toFixed(6)} , Speed: ${ (d.gpsSpeed||0).toFixed(2) } m/s;
+    }
+
+    // probability (server already computes prob but compute/update gauge too if needed)
+    const prob = (d.probability !== undefined ? Number(d.probability) : null);
+    if (prob !== null) {
+      updateGauge(prob);
+      // chart
+      probHistory.push(prob);
+      if (probHistory.length>40) probHistory.shift();
+      probChart.data.datasets[0].data = probHistory;
+      probChart.update();
+      // activity text & color
+      const activity = document.getElementById('activity');
+      const statusCard = document.getElementById('probText').parentElement;
+      document.getElementById('probText').innerText = Math.round(prob) + "%";
+      if (prob > 70) {
+        activity.innerText = "Riding 🚴‍";
+        statusCard.style.color = "#16a34a";
+      } else if (prob > 30) {
+        activity.innerText = "Walking 🚶";
+        statusCard.style.color = "#f59e0b";
+      } else {
+        activity.innerText = "Idle 🧍";
+        statusCard.style.color = "#ef4444";
+      }
+    }
+
+    // record row for CSV
+    const row = {
+      time: (new Date()).toISOString(),
+      tilt: d.tilt || 0,
+      accel: d.accel || 0,
+      accX: d.accX || 0, accY: d.accY || 0, accZ: d.accZ || 0,
+      brake: d.brake || 0,
+      ychange: d.ychange || 0,
+      heart: d.heart || 0,
+      lat: d.lat || 0, lon: d.lon || 0,
+      gpsSpeed: d.gpsSpeed || 0,
+      probability: d.probability || 0
+    };
+    recorded.push(row);
+    if (recorded.length > 10000) recorded.shift(); // cap memory
+  }
+
+  function updateGauge(prob) {
+    const gauge = document.getElementById('gaugeBar');
+    const text = document.getElementById('probText');
+    // stroke-dasharray: percent, 100
+    gauge.setAttribute('stroke-dasharray', ${prob},100);
+    if (prob < 40) gauge.style.stroke = "#ef4444";
+    else if (prob < 70) gauge.style.stroke = "#f59e0b";
+    else gauge.style.stroke = "#16a34a";
+  }
+
+  // Auto-open socket to default AP IP (try automatically once)
+  setTimeout(()=>{ connectSocket(WS_URL); }, 500);
+
+</script>
+</body>
+</html>
