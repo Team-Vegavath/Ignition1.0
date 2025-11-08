@@ -1,0 +1,329 @@
+import * as FileSystem from "expo-file-system";
+import * as Haptics from "expo-haptics"; // ✅ Vibration feedback
+import * as Location from "expo-location";
+import { Accelerometer, Gyroscope } from "expo-sensors";
+import * as Sharing from "expo-sharing";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Alert, Animated, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+
+// Define TypeScript types
+type SensorData = { x: number; y: number; z: number };
+
+const SensorValue = React.memo(({ label, value }: { label: string; value: number }) => (
+  <View style={styles.sensorItem}>
+    <Text style={styles.sensorLabel}>{label}</Text>
+    <Text style={styles.sensorValue}>{value?.toFixed(2) ?? "0.00"}</Text>
+  </View>
+));
+
+const SensorCard = ({ title, data }: { title: string; data: SensorData }) => (
+  <View style={styles.sensorCard}>
+    <Text style={styles.sensorTitle}>{title}</Text>
+    <View style={styles.sensorValues}>
+      <SensorValue label="X" value={data.x} />
+      <SensorValue label="Y" value={data.y} />
+      <SensorValue label="Z" value={data.z} />
+    </View>
+  </View>
+);
+
+const Metric = ({ label, value, unit }: { label: string; value: string | number; unit: string }) => (
+  <View style={styles.metricCard}>
+    <Text style={styles.metricLabel}>{label}</Text>
+    <Text style={styles.metricValue}>{value}</Text>
+    <Text style={styles.metricUnit}>{unit}</Text>
+  </View>
+);
+
+export default function Index() {
+  // Refs (high-frequency)
+  const accelRef = useRef<SensorData>({ x: 0, y: 0, z: 0 });
+  const gyroRef = useRef<SensorData>({ x: 0, y: 0, z: 0 });
+  const speedRef = useRef(0);
+  const statusRef = useRef("IDLE");
+  const latRef = useRef(0);
+  const lonRef = useRef(0);
+  const logRef = useRef("timestamp,lat,lon,speed,accX,accY,accZ,gyroX,gyroY,gyroZ,tilt,state\n");
+
+  // State (UI)
+  const [displayData, setDisplayData] = useState({
+    speed: 0,
+    status: "IDLE",
+    accel: { x: 0, y: 0, z: 0 },
+    gyro: { x: 0, y: 0, z: 0 },
+    dataPoints: 0,
+    latitude: 0,
+    longitude: 0,
+    tiltAngle: 0, // ✅ added
+  });
+  const [recording, setRecording] = useState(false);
+
+  const lastStateRef = useRef("IDLE");
+  const pulseAnim = useRef(new Animated.Value(1)).current;
+  const displayUpdateInterval = useRef<NodeJS.Timeout | null>(null);
+
+  // Permissions
+  useEffect(() => {
+    (async () => {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== "granted") {
+        Alert.alert("Permission Required", "Location access is needed to record rides.");
+      }
+    })();
+  }, []);
+
+  // Accelerometer
+  useEffect(() => {
+    Accelerometer.setUpdateInterval(100);
+    const sub = Accelerometer.addListener((data) => {
+      accelRef.current = data;
+    });
+    return () => sub?.remove();
+  }, []);
+
+  // Gyroscope
+  useEffect(() => {
+    Gyroscope.setUpdateInterval(100);
+    const sub = Gyroscope.addListener((data) => {
+      gyroRef.current = data;
+    });
+    return () => sub?.remove();
+  }, []);
+
+  // UI refresh 3Hz
+  useEffect(() => {
+    if (displayUpdateInterval.current) clearInterval(displayUpdateInterval.current);
+    displayUpdateInterval.current = setInterval(() => {
+      const { x, y, z } = accelRef.current;
+      const tiltAngle = (Math.atan2(x, Math.sqrt(y * y + z * z)) * 180) / Math.PI; // ✅ Calculate tilt
+      setDisplayData({
+        speed: speedRef.current,
+        status: statusRef.current,
+        accel: { ...accelRef.current },
+        gyro: { ...gyroRef.current },
+        dataPoints: logRef.current.split("\n").length - 2,
+        latitude: latRef.current,
+        longitude: lonRef.current,
+        tiltAngle,
+      });
+    }, 333);
+    return () => {
+      if (displayUpdateInterval.current) clearInterval(displayUpdateInterval.current);
+    };
+  }, []);
+
+  // Location tracking 5Hz
+  useEffect(() => {
+    let locationSub: Location.LocationSubscription | undefined;
+    if (recording) {
+      Location.watchPositionAsync(
+        { accuracy: Location.Accuracy.BestForNavigation, timeInterval: 200, distanceInterval: 0 },
+        (loc) => {
+          const rawSpeed = loc.coords.speed ?? 0;
+          speedRef.current = speedRef.current * 0.7 + rawSpeed * 0.3;
+          latRef.current = loc.coords.latitude;
+          lonRef.current = loc.coords.longitude;
+
+          const tiltAngle = (Math.atan2(accelRef.current.x, Math.sqrt(accelRef.current.y ** 2 + accelRef.current.z ** 2)) * 180) / Math.PI;
+          const state = detectState(speedRef.current, accelRef.current, gyroRef.current);
+          statusRef.current = state;
+
+          // 🔔 Vibrate when status changes or tilt > threshold
+          if (state !== lastStateRef.current || Math.abs(tiltAngle) > 15) {
+            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+            lastStateRef.current = state;
+          }
+
+          const ts = new Date().toISOString();
+          const row = `${ts},${loc.coords.latitude.toFixed(6)},${loc.coords.longitude.toFixed(6)},${speedRef.current.toFixed(2)},${accelRef.current.x.toFixed(2)},${accelRef.current.y.toFixed(2)},${accelRef.current.z.toFixed(2)},${gyroRef.current.x.toFixed(2)},${gyroRef.current.y.toFixed(2)},${gyroRef.current.z.toFixed(2)},${tiltAngle.toFixed(1)},${state}\n`;
+          logRef.current += row;
+        }
+      ).then((sub) => (locationSub = sub));
+    }
+    return () => locationSub?.remove();
+  }, [recording]);
+
+  // Recording animation
+  useEffect(() => {
+    if (recording) {
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(pulseAnim, { toValue: 1.2, duration: 600, useNativeDriver: true }),
+          Animated.timing(pulseAnim, { toValue: 1, duration: 600, useNativeDriver: true }),
+        ])
+      ).start();
+    } else {
+      pulseAnim.stopAnimation(() => pulseAnim.setValue(1));
+    }
+  }, [recording]);
+
+  const detectState = useCallback((spd: number, accel: SensorData, gyro: SensorData) => {
+    const speedKmh = spd * 3.6;
+    const accMag = Math.sqrt(accel.x ** 2 + accel.y ** 2 + accel.z ** 2);
+    const gyroMag = Math.sqrt(gyro.x ** 2 + gyro.y ** 2 + gyro.z ** 2);
+    if (speedKmh < 5 && gyroMag < 0.2 && accMag < 1.1) return "WALK";
+    if (speedKmh > 30 || gyroMag > 2.0) return "MOTORCYCLE";
+    if (speedKmh >= 5 && speedKmh <= 30) return "SCOOTER";
+    return "IDLE";
+  }, []);
+
+  // Save CSV
+  const saveFile = useCallback(async () => {
+    try {
+      setRecording(false);
+      await new Promise((res) => setTimeout(res, 300));
+      const logLines = logRef.current.split("\n").length;
+      if (logLines <= 2) {
+        Alert.alert("No Data Recorded", "Record a few seconds first before saving.");
+        return;
+      }
+      const dir = FileSystem.documentDirectory;
+      const fileName = `ride_${new Date().toISOString().replace(/[:.]/g, "-")}.csv`;
+      const path = dir + fileName;
+      await FileSystem.writeAsStringAsync(path, logRef.current);
+      if (await Sharing.isAvailableAsync()) {
+        Alert.alert("Data Saved", `File ready to share (${displayData.dataPoints} points).`, [
+          { text: "Share File", onPress: () => Sharing.shareAsync(path) },
+          { text: "Cancel", style: "cancel" },
+        ]);
+      } else {
+        Alert.alert("File Saved", `Saved to local app folder:\n${path}`);
+      }
+    } catch (err) {
+      console.error("❌ Save failed:", err);
+      Alert.alert("Save Failed", String(err));
+    }
+  }, [displayData.dataPoints]);
+
+  const resetData = useCallback(() => {
+    logRef.current = "timestamp,lat,lon,speed,accX,accY,accZ,gyroX,gyroY,gyroZ,tilt,state\n";
+    speedRef.current = 0;
+    statusRef.current = "IDLE";
+    latRef.current = 0;
+    lonRef.current = 0;
+    Alert.alert("Data Cleared", "Ready for a new ride.");
+  }, []);
+
+  // Colors
+  const statusColor = useMemo(() => {
+    switch (displayData.status) {
+      case "WALK": return "#10b981";
+      case "SCOOTER": return "#f59e0b";
+      case "MOTORCYCLE": return "#ef4444";
+      default: return "#6b7280";
+    }
+  }, [displayData.status]);
+
+  const statusEmoji = useMemo(() => {
+    switch (displayData.status) {
+      case "WALK": return "🚶";
+      case "SCOOTER": return "🛴";
+      case "MOTORCYCLE": return "🏍️";
+      default: return "⏸️";
+    }
+  }, [displayData.status]);
+
+  return (
+    <ScrollView style={styles.container}>
+      <View style={styles.header}>
+        <Text style={styles.title}>Smart Rider+</Text>
+        {recording && <Animated.View style={[styles.recordingDot, { transform: [{ scale: pulseAnim }] }]} />}
+      </View>
+
+      <View style={[styles.statusCard, { backgroundColor: statusColor }]}>
+        <Text style={styles.statusEmoji}>{statusEmoji}</Text>
+        <Text style={styles.statusText}>{displayData.status}</Text>
+      </View>
+
+      <View style={styles.metricsGrid}>
+        <Metric label="Speed" value={(displayData.speed * 3.6).toFixed(1)} unit="km/h" />
+        <Metric label="Samples" value={displayData.dataPoints} unit="points" />
+      </View>
+
+      <View style={styles.metricsGrid}>
+        <Metric label="Latitude" value={displayData.latitude.toFixed(5)} unit="" />
+        <Metric label="Longitude" value={displayData.longitude.toFixed(5)} unit="" />
+      </View>
+
+      <View style={styles.metricsGrid}>
+        <Metric label="Tilt Angle" value={displayData.tiltAngle.toFixed(1)} unit="°" />
+      </View>
+
+      <View style={styles.sensorRow}>
+        <SensorCard title="Accelerometer" data={displayData.accel} />
+        <SensorCard title="Gyroscope" data={displayData.gyro} />
+      </View>
+
+      <View style={styles.controls}>
+        <Pressable
+          style={[styles.button, recording ? styles.buttonStop : styles.buttonStart]}
+          onPress={() => setRecording(!recording)}
+        >
+          <Text style={styles.buttonText}>{recording ? "⏹ Stop" : "▶️ Start"}</Text>
+        </Pressable>
+
+        <View style={styles.buttonRow}>
+          <Pressable
+            style={[styles.button, styles.buttonSecondary, styles.buttonHalf]}
+            onPress={saveFile}
+            disabled={recording}
+          >
+            <Text style={styles.buttonText}>💾 Save</Text>
+          </Pressable>
+          <Pressable
+            style={[styles.button, styles.buttonSecondary, styles.buttonHalf]}
+            onPress={resetData}
+            disabled={recording}
+          >
+            <Text style={styles.buttonText}>🔄 Reset</Text>
+          </Pressable>
+        </View>
+      </View>
+
+      <Text style={styles.footer}>Smart Rider+ • Tilt + Vibration • Scrollable UI</Text>
+    </ScrollView>
+  );
+}
+
+// === Styles ===
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: "#0a0e1a", padding: 20, paddingTop: 60 },
+  header: { flexDirection: "row", alignItems: "center", justifyContent: "center", marginBottom: 24 },
+  title: { fontSize: 28, fontWeight: "bold", color: "#fff" },
+  recordingDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: "#ef4444", marginLeft: 10 },
+  statusCard: {
+    borderRadius: 20,
+    padding: 24,
+    alignItems: "center",
+    marginBottom: 16,
+  },
+  statusEmoji: { fontSize: 56 },
+  statusText: { fontSize: 22, fontWeight: "700", color: "#fff" },
+  metricsGrid: { flexDirection: "row", gap: 12, marginBottom: 16 },
+  metricCard: {
+    flex: 1,
+    backgroundColor: "#1a1f2e",
+    borderRadius: 16,
+    padding: 18,
+    alignItems: "center",
+  },
+  metricLabel: { fontSize: 11, color: "#8b93a7", marginBottom: 6 },
+  metricValue: { fontSize: 28, fontWeight: "bold", color: "#fff" },
+  metricUnit: { fontSize: 11, color: "#5a6270", marginTop: 2 },
+  sensorRow: { flexDirection: "row", gap: 12, marginBottom: 20 },
+  sensorCard: { flex: 1, backgroundColor: "#1a1f2e", borderRadius: 16, padding: 16 },
+  sensorTitle: { fontSize: 11, color: "#8b93a7", marginBottom: 12 },
+  sensorValues: { gap: 8 },
+  sensorItem: { flexDirection: "row", justifyContent: "space-between" },
+  sensorLabel: { fontSize: 13, color: "#5a6270" },
+  sensorValue: { fontSize: 16, fontWeight: "600", color: "#fff" },
+  controls: { gap: 12 },
+  button: { borderRadius: 14, padding: 18, alignItems: "center" },
+  buttonStart: { backgroundColor: "#10b981" },
+  buttonStop: { backgroundColor: "#ef4444" },
+  buttonSecondary: { backgroundColor: "#2a3142" },
+  buttonText: { fontSize: 16, fontWeight: "700", color: "#fff" },
+  buttonRow: { flexDirection: "row", gap: 12 },
+  buttonHalf: { flex: 1 },
+  footer: { textAlign: "center", color: "#5a6270", fontSize: 11, marginTop: 20 },
+});
