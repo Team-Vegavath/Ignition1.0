@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Sensor Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<style>
+body { font-family: Arial, sans-serif; margin:0; padding:0; background:#f0f2f5; }
+header { background:#4a90e2; color:white; padding:15px; text-align:center; font-size:24px; font-weight:bold; }
+#dashboard { display:grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 20px; padding: 20px; }
+.card { background:white; border-radius:12px; padding:15px; box-shadow:0 4px 8px rgba(0,0,0,0.15); display:flex; flex-direction:column; align-items:center; }
+h3 { margin:10px 0; }
+canvas { background:#fff; border-radius:10px; max-width:100%; }
+#map { height:400px; width:100%; border-radius:10px; }
+#videoStream { width: 100%; max-width: 1280px; border-radius: 10px; object-fit: contain; aspect-ratio: 16/9; background: #000; }
+.value { font-size:18px; margin-bottom:10px; font-weight:bold; }
+#activity { font-size:20px; font-weight:bold; margin-top:10px; }
+#activity.Standing { color: green; }
+#activity.Walking { color: orange; }
+#activity.Scooter { color: purple; }
+#activity.Bike { color: blue; }
+</style>
+</head>
+<body>
+
+<header>Sensor Dashboard</header>
+
+<div id="dashboard">
+  <div class="card">
+    <h3>Acceleration (m/s²)</h3>
+    <div class="value">Ax: <span id="AxVal">0</span>, Ay: <span id="AyVal">0</span>, Az: <span id="AzVal">0</span></div>
+    <canvas id="accelChart"></canvas>
+  </div>
+
+  <div class="card">
+    <h3>Speed (m/s)</h3>
+    <div class="value">Current: <span id="currentSpeed">0</span></div>
+    <canvas id="speedChart"></canvas>
+  </div>
+
+  <div class="card">
+    <h3>Activity</h3>
+    <div id="activity">-</div>
+  </div>
+
+  <div class="card" style="grid-column:1/-1;">
+    <h3>Live Video (MJPEG 720p)</h3>
+    <img id="videoStream" src="http://100.83.127.9:8080/video" alt="Video Stream"/>
+  </div>
+
+  <div class="card" style="grid-column:1/-1;">
+    <h3>GPS Map</h3>
+    <div id="map"></div>
+  </div>
+</div>
+
+<script>
+const MAX_POINTS = 100;
+const GPS_POINTS = 500;
+const dt = 0.2;
+let startTime = Date.now();
+
+// Acceleration
+let accelData = {Ax:[], Ay:[], Az:[]};
+let accelBuffer = [];
+const ACCEL_WINDOW = 15;
+
+// Speed
+let speedData = [];
+let imuSpeed = 0;
+let smoothSpeed = 0;
+let lastGps = null;
+let lastTime = null;
+const alpha = 0.8; 
+const beta = 0.2;  
+const SPEED_WINDOW = 5;
+let speedBuffer = [];
+
+// Charts
+const accelChart = new Chart(document.getElementById('accelChart'), {
+    type:'line',
+    data:{datasets:[
+      {label:'Ax', borderColor:'red', data:[]},
+      {label:'Ay', borderColor:'green', data:[]},
+      {label:'Az', borderColor:'blue', data:[]}
+    ]},
+    options:{animation:false, parsing:false, scales:{x:{type:'linear', title:{display:true,text:'Time (s)'}}, y:{title:{display:true,text:'m/s²'}}}}
+});
+
+const speedChart = new Chart(document.getElementById('speedChart'), {
+    type:'line',
+    data:{datasets:[{label:'Speed', borderColor:'orange', data:[]}]},
+    options:{animation:false, parsing:false, scales:{x:{type:'linear', title:{display:true,text:'Time (s)'}}, y:{title:{display:true,text:'m/s'}, min:0}}}
+});
+
+// Map
+const map = L.map('map').setView([12.86164141, 77.66460835], 15);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{ maxZoom:19 }).addTo(map);
+const polyline = L.polyline([], {color:'blue'}).addTo(map);
+const currentMarker = L.marker([12.86164141, 77.66460835], {
+    icon: L.icon({
+        iconUrl: 'https://cdn-icons-png.flaticon.com/512/252/252025.png', // simple marker sprite
+        iconSize: [32,32],
+        iconAnchor: [16,16]
+    })
+}).addTo(map);
+
+// Activity detection with Scooter/Bike differentiation
+function computeActivity(speed, accelBuf){
+    if(accelBuf.length === 0) return "-";
+    
+    let n = accelBuf.length;
+    let mean = [0,0,0];
+    accelBuf.forEach(a=>{ mean[0]+=a[0]; mean[1]+=a[1]; mean[2]+=a[2]; });
+    mean = mean.map(m=>m/n);
+    let varAcc = [0,0,0];
+    accelBuf.forEach(a=>{ varAcc[0]+=(a[0]-mean[0])**2; varAcc[1]+=(a[1]-mean[1])**2; varAcc[2]+=(a[2]-mean[2])**2; });
+    varAcc = varAcc.map(v=>v/n);
+    let totalVar = varAcc[0]+varAcc[1]+varAcc[2];
+
+    const last = accelBuf[accelBuf.length-1];
+    const pitchRad = Math.atan2(last[0], Math.sqrt(last[1]**2 + last[2]**2));
+    const pitchDeg = pitchRad * 180/Math.PI;
+
+    if(speed < 0.5) return "Standing";
+    if(speed >= 0.5 && speed < 3 && totalVar > 0.1) return "Walking";
+    if(speed >= 3){
+        if(Math.abs(pitchDeg) < 15) return "Scooter";
+        else return "Bike";
+    }
+    return "-";
+}
+
+let lastChartUpdate = 0;
+
+function updateDashboard(){
+    const now = (Date.now()-startTime)/1000;
+
+    // Fetch acceleration
+    fetch('http://100.83.127.9:8080/sensors.json')
+    .then(res=>res.json())
+    .then(sensors=>{
+        const la = sensors.lin_accel.data.slice(-1)[0];
+        const vals = la[1];
+        imuSpeed += vals[0]*dt;
+
+        accelBuffer.push(vals);
+        if(accelBuffer.length>ACCEL_WINDOW) accelBuffer.shift();
+
+        ['Ax','Ay','Az'].forEach((axis,i)=>{
+            accelData[axis].push({x:now, y:vals[i]});
+            document.getElementById(axis+'Val').innerText = vals[i].toFixed(2);
+            if(accelData[axis].length>MAX_POINTS) accelData[axis].shift();
+        });
+    }).catch(err=>console.log('Accel fetch error', err));
+
+    // Fetch GPS
+    fetch('http://100.83.127.9:8080/gps.json')
+    .then(res=>res.json())
+    .then(gps=>{
+        const lat = gps.gps.latitude;
+        const lng = gps.gps.longitude;
+        const ts = Date.now()/1000;
+
+        // Update polyline
+        polyline.addLatLng([lat,lng]);
+        if(polyline.getLatLngs().length>GPS_POINTS) polyline.getLatLngs().shift();
+
+        // Move marker to current position
+        currentMarker.setLatLng([lat,lng]);
+
+        // Zoom/center map on current location
+        map.setView([lat,lng], 17);
+
+        let gpsSpeed = 0;
+        if(lastGps){
+            const R = 6371000;
+            const dLat = (lat-lastGps.lat)*Math.PI/180;
+            const dLon = (lng-lastGps.lng)*Math.PI/180;
+            const a = Math.sin(dLat/2)**2 + Math.cos(lastGps.lat*Math.PI/180)*Math.cos(lat*Math.PI/180)*Math.sin(dLon/2)**2;
+            const c = 2*Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+            const distance = R*c;
+            const dtGps = ts - lastTime;
+            gpsSpeed = dtGps>0 ? distance/dtGps : 0;
+        }
+        lastGps = {lat,lng};
+        lastTime = ts;
+
+        // Combine GPS + IMU
+        let combinedSpeed = gpsSpeed > 0.5 ? alpha*gpsSpeed + (1-alpha)*imuSpeed : gpsSpeed;
+        speedBuffer.push(combinedSpeed);
+        if(speedBuffer.length > SPEED_WINDOW) speedBuffer.shift();
+        smoothSpeed = beta*(speedBuffer.reduce((a,b)=>a+b,0)/speedBuffer.length) + (1-beta)*smoothSpeed;
+        smoothSpeed = Math.max(0, smoothSpeed);
+        imuSpeed = smoothSpeed;
+
+        speedData.push({x:now, y:smoothSpeed});
+        if(speedData.length>MAX_POINTS) speedData.shift();
+
+        document.getElementById('currentSpeed').innerText = smoothSpeed.toFixed(2);
+        const activity = computeActivity(smoothSpeed, accelBuffer);
+        const actElem = document.getElementById('activity');
+        actElem.innerText = activity;
+        actElem.className = activity;
+
+        if(Date.now() - lastChartUpdate > 500){
+            accelChart.data.datasets.forEach((ds,i)=>ds.data = accelData[['Ax','Ay','Az'][i]]);
+            accelChart.update();
+            speedChart.data.datasets[0].data = speedData;
+            speedChart.update();
+            lastChartUpdate = Date.now();
+        }
+    }).catch(err=>{
+        smoothSpeed = Math.max(0, imuSpeed);
+        speedData.push({x:now, y:smoothSpeed});
+        if(speedData.length>MAX_POINTS) speedData.shift();
+        document.getElementById('currentSpeed').innerText = smoothSpeed.toFixed(2);
+        const activity = computeActivity(smoothSpeed, accelBuffer);
+        const actElem = document.getElementById('activity');
+        actElem.innerText = activity;
+        actElem.className = activity;
+
+        if(Date.now() - lastChartUpdate > 500){
+            accelChart.data.datasets.forEach((ds,i)=>ds.data = accelData[['Ax','Ay','Az'][i]]);
+            accelChart.update();
+            speedChart.data.datasets[0].data = speedData;
+            speedChart.update();
+            lastChartUpdate = Date.now();
+        }
+    });
+}
+
+setInterval(updateDashboard, dt*1000);
+</script>
+
+</body>
+</html>
