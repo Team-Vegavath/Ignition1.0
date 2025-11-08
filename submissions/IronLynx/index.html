@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ESP32 Live Dashboard</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<style>
+body { font-family: Arial; margin:10px; }
+#live { font-weight:bold; margin-bottom:10px; white-space: pre-line; }
+#history { font-size:0.85em; color:#333; max-height:200px; overflow:auto; margin-bottom:10px;}
+#map { height:300px; margin-top:10px; border:1px solid #aaa; }
+</style>
+</head>
+<body>
+<h2>ESP32 Sensor + GPS Dashboard</h2>
+
+<div id="live">Connecting...</div>
+<div id="history"></div>
+<div id="map"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+// ------------------ DOM Elements ------------------
+let liveEl = document.getElementById("live");
+let historyEl = document.getElementById("history");
+let history = [];
+
+// ------------------ Map Setup ------------------
+let map = L.map('map').setView([0,0], 2);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19,
+    attribution: '© OpenStreetMap'
+}).addTo(map);
+let marker = L.marker([0,0]).addTo(map);
+
+// ------------------ SSE Connection ------------------
+let espIp = "192.168.4.1"; // Change if ESP32 IP differs
+let evtSource = new EventSource("http://" + espIp);
+
+evtSource.onopen = function() {
+    liveEl.textContent = "Connected to ESP32...";
+};
+
+evtSource.onerror = function(e){
+    liveEl.textContent = "Connection lost. Reconnecting...";
+};
+
+// ------------------ Handle Incoming Data ------------------
+evtSource.onmessage = function(e){
+    try{
+        let data = JSON.parse(e.data);
+
+        // Live display
+        let liveText = 
+`Accel: X=${data.ax} Y=${data.ay} Z=${data.az}
+Gyro: X=${data.gx} Y=${data.gy} Z=${data.gz}
+Temp: ${data.temp} °C
+GPS: Lat=${data.lat} Lon=${data.lon}
+Speed: ${data.speed} km/h
+Mode: ${data.mode}`;
+        liveEl.textContent = liveText;
+
+        // Append to history
+        let timestamp = new Date().toLocaleTimeString();
+        history.push(${timestamp} → ${liveText});
+        if(history.length > 1000) history.shift(); // keep history infinite but limit memory
+        historyEl.innerHTML = history.join("<br>");
+
+        // Update map marker
+        if(data.lat != 0 && data.lon != 0){
+            marker.setLatLng([data.lat, data.lon]);
+            map.setView([data.lat, data.lon], 16);
+        }
+    } catch(err){
+        console.error("JSON parse error", err);
+    }
+};
+</script>
+</body>
+</html>
