@@ -50,44 +50,43 @@ It also supports **phone mirroring** using **ApowerMirror**, allowing the app di
    ```bash
    git clone https://github.com/your-username/smart-rider.git
    cd smart-rider
-
-
-2. Install dependencies:
-   npm install
-
-
-3. Start the app using Expo:
-  npx expo start
-
-
-4. Scan the QR code using Expo Go on your mobile device to open the app.
    
-   
-5. Using ApowerMirror for Display
- Install ApowerMirror on both devices (rider’s phone and viewing device).
- Connect both devices to the same Wi-Fi network or use USB connection.
- On the rider’s phone, select Phone Screen Mirroring and choose the target device.
- The app display will appear on the mirrored device in real-time.
+
+**Install dependencies:**
+npm install
 
 
-What Smart Rider+ Displays   
+**Start the app using Expo:**
+npx expo start
+
+
+**Scan the QR code using Expo Go on your mobile device to open the app.**
+
+
+**Using ApowerMirror for Display**
+Install ApowerMirror on both devices (rider’s phone and viewing device).
+Connect both devices to the same Wi-Fi network or use USB connection.
+On the rider’s phone, select Phone Screen Mirroring and choose the target device.
+The app display will appear on the mirrored device in real-time.
+
+
+**What Smart Rider+ Displays**
 Current activity type: Walking / Biking / Scooter
 Speed: Real-time in km/h or mph
 Distance traveled: Real-time
 Route: Displayed on a map
 Sensor data visualization: Optional (debug mode)
-Technologies Used
+
+
+**Technologies Used**
 React Native – Cross-platform mobile app framework
 Expo Go – Run the app on mobile devices without building a standalone app
 React Native Maps – Map visualization
 ApowerMirror – Phone screen mirroring
 
 
-Future Enhancements
+**Future Enhancements**
 Integrate machine learning for improved activity classification
 Add historical activity tracking with charts and summaries
 Implement notifications for milestones or goals
 Support multiple users or profiles
-   
-   git clone https://github.com/your-username/smart-rider.git
-   cd smart-rider
