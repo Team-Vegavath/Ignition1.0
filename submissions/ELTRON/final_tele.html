@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Admin | Rider Telemetry</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+:root {
+    --text-xl: 4.5rem; --text-lg: 1.5rem; --text-md: 1rem; --text-sm: 0.875rem; --text-xs: 0.75rem;
+    --bg: #f5f5f7; --card: #ffffff; --text: #1d1d1f; --muted: #86868b;
+    --accent: #007aff; --success: #34c759; --danger: #ff3b30;
+    --r-sm: 12px; --r-md: 20px; --r-lg: 24px;
+    --gap-xs: 8px; --gap-sm: 12px; --gap-md: 16px; --gap-lg: 24px;
+    --shadow: 0 4px 20px rgba(0,0,0,0.08); --shadow-hover: 0 8px 30px rgba(0,0,0,0.12);
+}
+*, *::before, *::after { box-sizing: border-box; margin:0; padding:0; }
+html { font-size: 16px; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--text); display: flex; flex-direction: column; min-height: 100vh; }
+.container { max-width: 420px; margin: 0 auto; padding: 0 var(--gap-md); flex: 1; display: flex; flex-direction: column; gap: var(--gap-lg); }
+
+.status-bar { background: var(--card); padding: var(--gap-sm) var(--gap-lg); display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #e5e5e7; position: sticky; top: 0; z-index: 200; }
+.time { font-weight: 600; font-size: var(--text-sm); }
+.status-icons { display: flex; gap: var(--gap-xs); font-size: var(--text-xs); }
+
+.header { background: var(--card); padding: var(--gap-lg); border-bottom: 1px solid #e5e5e7; text-align: center; }
+.header-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--gap-md); }
+.brand-name { font-size: 1.5rem; font-weight: 700; letter-spacing: 1.5px; color: var(--accent); }
+.connection-status { background: #f0f0f0; padding: var(--gap-xs) var(--gap-md); border-radius: var(--r-lg); font-size: var(--text-sm); display: flex; align-items: center; gap: var(--gap-xs); }
+.status-dot { width: 8px; height: 8px; border-radius: 50%; animation: pulse 2s infinite; }
+.status-dot.connected { background: var(--success); }
+.status-dot.disconnected { background: var(--danger); animation: none; }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.5} }
+
+.card { background: var(--card); border-radius: var(--r-md); padding: var(--gap-lg); box-shadow: var(--shadow); display: flex; flex-direction: column; align-items: center; }
+
+.speed-card .ride-mode { padding: var(--gap-xs) var(--gap-lg); border-radius: var(--r-lg); font-size: var(--text-xs); font-weight: 600; letter-spacing: 1px; text-transform: uppercase; margin-bottom: var(--gap-lg); }
+.mode-walking { background: var(--success); color: #fff; }
+.mode-scooter { background: var(--accent); color: #fff; }
+.mode-motorcycle { background: var(--danger); color: #fff; }
+.speed-value { font-size: var(--text-xl); font-weight: 200; line-height: 1; margin: var(--gap-md) 0 var(--gap-xs); }
+.speed-unit { font-size: var(--text-lg); color: var(--muted); }
+.speed-progress { width: 100%; height: 4px; background: #f0f0f0; border-radius: 2px; overflow: hidden; margin-top: var(--gap-lg); }
+.speed-progress-bar { height: 100%; background: linear-gradient(90deg, var(--accent), #00c7be); border-radius: 2px; transition: width .3s ease; }
+
+.card-header { display: flex; align-items: center; justify-content: center; gap: var(--gap-md); width: 100%; padding-bottom: var(--gap-md); margin-bottom: var(--gap-lg); border-bottom: 1px solid #f0f0f0; text-align: left; }
+.card-header-icon { width: 40px; height: 40px; background: #f0f0f0; border-radius: var(--r-sm); display: flex; align-items: center; justify-content: center; font-size: 1.25rem; flex-shrink: 0; }
+.card-header-title { font-size: var(--text-md); font-weight: 600; }
+.card-header-subtitle { font-size: var(--text-xs); color: var(--muted); margin-top: 2px; }
+
+/* 6-item grid: 2 columns, 3 rows – perfect symmetry */
+.telemetry-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--gap-md);
+    width: 100%;
+}
+.telemetry-item {
+    background: #f5f5f7;
+    padding: var(--gap-md);
+    border-radius: var(--r-sm);
+    text-align: center;
+}
+.telemetry-label { font-size: var(--text-xs); color: var(--muted); margin-bottom: 4px; }
+.telemetry-value { font-size: 1.25rem; font-weight: 600; }
+
+/* Heart rate highlight */
+.heart-rate .telemetry-value { color: var(--danger); font-weight: 700; }
+
+.map-card .map-header { justify-content: space-between; padding: 0; margin: 0 0 var(--gap-lg) 0; }
+.map-title { font-size: var(--text-md); font-weight: 600; }
+.gps-status { display: flex; align-items: center; gap: 4px; font-size: var(--text-xs); color: var(--success); }
+.map-container { height: 250px; position: relative; overflow: hidden; border-radius: var(--r-md); background: #f0f0f0; }
+.map-svg { width: 100%; height: 100%; object-fit: cover; }
+.map-overlay { position: absolute; left: var(--gap-md); right: var(--gap-md); bottom: var(--gap-md); background: var(--card); border-radius: var(--r-sm); padding: var(--gap-md); display: flex; justify-content: space-between; align-items: center; font-size: var(--text-xs); box-shadow: var(--shadow); }
+.location-coords { font-weight: 600; margin-top: 2px; font-size: var(--text-sm); }
+
+.stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--gap-md); width: 100%; }
+.stat-card { background: #f5f5f7; padding: var(--gap-md); border-radius: var(--r-sm); text-align: center; }
+.stat-label { font-size: var(--text-xs); color: var(--muted); margin-bottom: 4px; }
+.stat-value { font-size: 1.5rem; font-weight: 700; }
+
+.export-btn { width: 100%; padding: var(--gap-md); background: var(--accent); color: #fff; border: none; border-radius: var(--r-sm); font-size: var(--text-md); font-weight: 600; cursor: pointer; transition: background .3s; margin-top: var(--gap-lg); }
+.export-btn:hover { background: #0051d5; }
+
+@media (max-width: 480px) { :root { --text-xl: 3.75rem; } }
+</style>
+</head>
+<body>
+
+<div class="status-bar">
+    <div class="time" id="currentTime">8:48</div>
+    <div class="status-icons">
+        <span>Battery <span id="batteryLevel">85%</span></span>
+        <span>Network 4G</span>
+    </div>
+</div>
+
+<div class="header">
+    <div class="header-top">
+        <div class="brand-name">TELEMETRY</div>
+        <div class="connection-status">
+            <span class="status-dot connected" id="connectionDot"></span>
+            <span id="connectionText">Arduino Connected</span>
+        </div>
+    </div>
+</div>
+
+<div class="container">
+
+    <section class="card speed-card">
+        <div class="ride-mode mode-scooter" id="rideMode">SCOOTER</div>
+        <div class="speed-value" id="speedValue">25</div>
+        <div class="speed-unit">km/h</div>
+        <div class="speed-progress"><div class="speed-progress-bar" id="speedProgress" style="width:30%"></div></div>
+    </section>
+
+    <section class="card telemetry-card">
+        <div class="card-header">
+            <div class="card-header-icon">Chart</div>
+            <div><div class="card-header-title">Live Telemetry</div><div class="card-header-subtitle">Real-time sensor data</div></div>
+        </div>
+        <div class="telemetry-grid">
+            <div class="telemetry-item"><div class="telemetry-label">Acc X</div><div class="telemetry-value" id="accX">0.52 g</div></div>
+            <div class="telemetry-item"><div class="telemetry-label">Acc Y</div><div class="telemetry-value" id="accY">-0.31 g</div></div>
+            <div class="telemetry-item"><div class="telemetry-label">Acc Z</div><div class="telemetry-value" id="accZ">1.02 g</div></div>
+            <div class="telemetry-item"><div class="telemetry-label">Decel</div><div class="telemetry-value" id="decel">0.00 g</div></div>
+            <div class="telemetry-item"><div class="telemetry-label">Data Points</div><div class="telemetry-value" id="dataCount">1,247</div></div>
+            <!-- Heart Rate Added -->
+            <div class="telemetry-item heart-rate"><div class="telemetry-label">Heart Rate</div><div class="telemetry-value" id="heartRate">78 BPM</div></div>
+        </div>
+    </section>
+
+    <!-- MAP CARD — KEPT INTACT -->
+    <section class="card map-card">
+        <div class="card-header map-header">
+            <div class="map-title">Live Tracking</div>
+            <div class="gps-status">Circle GPS Active</div>
+        </div>
+        <div class="map-container">
+            <svg class="map-svg" viewBox="0 0 400 250" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg">
+                <defs>
+                    <linearGradient id="road" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" stop-color="#c0c0c0"/><stop offset="100%" stop-color="#a0a0a0"/></linearGradient>
+                    <linearGradient id="bldg" x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" stop-color="#e0e0e0"/><stop offset="100%" stop-color="#b0b0b0"/></linearGradient>
+                </defs>
+                <path d="M0,125 H400 M200,0 V250 M100,0 V250 M300,0 V250" stroke="url(#road)" stroke-width="12" fill="none"/>
+                <path d="M0,75 H400 M0,175 H400" stroke="url(#road)" stroke-width="8" stroke-dasharray="20,10" fill="none"/>
+                <rect x="40" y="30" width="60" height="70" fill="url(#bldg)" rx="4"/>
+                <rect x="300" y="30" width="60" height="70" fill="url(#bldg)" rx="4"/>
+                <rect x="120" y="50" width="50" height="60" fill="url(#bldg)" rx="4"/>
+                <rect x="230" y="50" width="50" height="60" fill="url(#bldg)" rx="4"/>
+                <rect x="40" y="150" width="55" height="65" fill="url(#bldg)" rx="4"/>
+                <rect x="305" y="150" width="55" height="65" fill="url(#bldg)" rx="4"/>
+                <circle id="locationMarker" cx="200" cy="125" r="10" fill="#ff3b30" stroke="#fff" stroke-width="2"/>
+                <circle id="locationPulse" cx="200" cy="125" r="16" fill="none" stroke="#ff3b30" stroke-width="2" opacity="0.6">
+                    <animate attributeName="r" values="16;28" dur="1.5s" repeatCount="indefinite"/>
+                    <animate attributeName="opacity" values="0.6;0" dur="1.5s" repeatCount="indefinite"/>
+                </circle>
+            </svg>
+            <div class="map-overlay">
+                <div><div style="color:#86868b;font-size:.625rem;">Current Location</div><div class="location-coords" id="gpsCoords">17.4474°N, 78.3762°E</div></div>
+                <div style="font-size:1.25rem;">Location Pin</div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ADMIN STATS — KEPT INTACT -->
+    <section class="card">
+        <div class="card-header">
+            <div class="card-header-icon">Gear</div>
+            <div><div class="card-header-title">Admin Statistics</div><div class="card-header-subtitle">Ride summary</div></div>
+        </div>
+        <div class="stats-grid">
+            <div class="stat-card"><div class="stat-label">Total Distance</div><div class="stat-value" id="totalDistance">45.2 km</div></div>
+            <div class="stat-card"><div class="stat-label">Max Speed</div><div class="stat-value" id="maxSpeed">68 km/h</div></div>
+            <div class="stat-card"><div class="stat-label">Avg Speed</div><div class="stat-value" id="avgSpeed">32 km/h</div></div>
+            <div class="stat-card"><div class="stat-label">Ride Time</div><div class="stat-value" id="rideTime">1h 24m</div></div>
+        </div>
+        <button class="export-btn" onclick="exportFullReport()">Export Full Report</button>
+    </section>
+</div>
+
+<script>
+let telemetryData = { 
+    speed: 25, accX: 0, accY: 0, accZ: 0, 
+    latitude: 17.4474, longitude: 78.3762, 
+    vehicleType: 'SCOOTER', dataCount: 1247, 
+    maxSpeed: 68, totalDistance: 45.2, 
+    startTime: Date.now() - 5040000,
+    heartRate: 78  // Added
+};
+
+function updateTime(){
+    const n = new Date();
+    document.getElementById('currentTime').textContent = 
+        `${n.getHours().toString().padStart(2,'0')}:${n.getMinutes().toString().padStart(2,'0')}`;
+}
+setInterval(updateTime, 1000); updateTime();
+
+function simulateDataReceive(){
+    telemetryData.accX = (Math.random()-0.5)*2;
+    telemetryData.accY = (Math.random()-0.5)*1;
+    telemetryData.accZ = 0.98 + (Math.random()-0.5)*0.2;
+    telemetryData.speed = Math.random()>0.5 
+        ? Math.min(80, telemetryData.speed + Math.random()*5)
+        : Math.max(0, telemetryData.speed - Math.random()*3);
+    telemetryData.maxSpeed = Math.max(telemetryData.maxSpeed, telemetryData.speed);
+    telemetryData.dataCount++;
+    telemetryData.totalDistance += (telemetryData.speed/3600)*0.1;
+    telemetryData.latitude += (Math.random()-0.5)*0.0001;
+    telemetryData.longitude += (Math.random()-0.5)*0.0001;
+
+    // Heart rate simulation (60–120 BPM, speed-sensitive)
+    const baseHR = 70;
+    const speedFactor = telemetryData.speed / 80;
+    telemetryData.heartRate = Math.round(baseHR + speedFactor * 40 + (Math.random() - 0.5) * 8);
+    telemetryData.heartRate = Math.max(60, Math.min(120, telemetryData.heartRate));
+
+    if(telemetryData.speed < 5) telemetryData.vehicleType = 'WALKING';
+    else if(telemetryData.speed < 30) telemetryData.vehicleType = 'SCOOTER';
+    else telemetryData.vehicleType = 'MOTORCYCLE';
+
+    updateUI();
+    updateMapMarker();
+}
+
+function updateUI(){
+    document.getElementById('speedValue').textContent = Math.round(telemetryData.speed);
+    document.getElementById('speedProgress').style.width = Math.min(100, (telemetryData.speed/80)*100) + '%';
+
+    const mode = document.getElementById('rideMode');
+    mode.textContent = telemetryData.vehicleType;
+    mode.className = 'ride-mode mode-' + telemetryData.vehicleType.toLowerCase();
+
+    ['accX','accY','accZ'].forEach(id => 
+        document.getElementById(id).textContent = telemetryData[id].toFixed(2) + ' g'
+    );
+    document.getElementById('decel').textContent = Math.abs(Math.min(0, telemetryData.accX)).toFixed(2) + ' g';
+    document.getElementById('dataCount').textContent = telemetryData.dataCount.toLocaleString();
+    document.getElementById('heartRate').textContent = telemetryData.heartRate + ' BPM'; // Updated
+    document.getElementById('gpsCoords').textContent = 
+        `${telemetryData.latitude.toFixed(4)}°N, ${telemetryData.longitude.toFixed(4)}°E`;
+
+    document.getElementById('totalDistance').textContent = telemetryData.totalDistance.toFixed(1) + ' km';
+    document.getElementById('maxSpeed').textContent = Math.round(telemetryData.maxSpeed) + ' km/h';
+    const avg = telemetryData.totalDistance / ((Date.now()-telemetryData.startTime)/3600000);
+    document.getElementById('avgSpeed').textContent = Math.round(avg) + ' km/h';
+
+    const ride = Date.now() - telemetryData.startTime;
+    const h = Math.floor(ride/3600000), m = Math.floor((ride%3600000)/60000);
+    document.getElementById('rideTime').textContent = `${h}h ${m}m`;
+}
+
+function updateMapMarker(){
+    const x = ((telemetryData.longitude - 78.36)/(78.39-78.36)) * 400;
+    const y = ((17.46 - telemetryData.latitude)/(17.46-17.44)) * 250;
+    document.getElementById('locationMarker').setAttribute('cx', x);
+    document.getElementById('locationMarker').setAttribute('cy', y);
+    document.getElementById('locationPulse').setAttribute('cx', x);
+    document.getElementById('locationPulse').setAttribute('cy', y);
+}
+
+function exportFullReport(){ 
+    alert('Full admin report exported!'); 
+}
+
+window.addEventListener('load', () => {
+    updateMapMarker();
+    setInterval(simulateDataReceive, 100);
+});
+
+let connected = true;
+setInterval(() => {
+    if (Math.random() > 0.95) {
+        connected = !connected;
+        const d = document.getElementById('connectionDot');
+        const t = document.getElementById('connectionText');
+        d.classList.toggle('connected', connected);
+        d.classList.toggle('disconnected', !connected);
+        t.textContent = connected ? 'Arduino Connected' : 'Connection Lost';
+    }
+}, 2000);
+</script>
+</body>
+</html>
