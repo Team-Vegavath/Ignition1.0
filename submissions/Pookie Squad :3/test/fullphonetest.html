@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Helmet Sensor Logger</title>
+  <style>
+    body { font-family: sans-serif; padding: 10px; background: #111; color: #eee; }
+    h2 { color: #6cf; }
+    #status { font-weight: bold; color: #0f0; }
+    .sensor-box { border: 1px solid #333; padding: 10px; margin: 10px 0; border-radius: 10px; background: #222; }
+  </style>
+</head>
+<body>
+  <h2>🏍 Helmet Sensor Logger</h2>
+  <p>Status: <span id="status">Initializing...</span></p>
+
+  <div class="sensor-box" id="gpsBox"></div>
+  <div class="sensor-box" id="accelBox"></div>
+  <div class="sensor-box" id="gyroBox"></div>
+  <div class="sensor-box" id="orientBox"></div>
+  <div class="sensor-box" id="lightBox"></div>
+
+  <script>
+    const SERVER_URL = "http://192.168.1.100:5000/data"; // change to your server IP/port
+    const UPDATE_INTERVAL = 200; // ms
+
+    const state = {
+      accel: {x:null,y:null,z:null},
+      gyro: {alpha:null,beta:null,gamma:null},
+      orient: {alpha:null,beta:null,gamma:null},
+      gps: {lat:null,lon:null,speed:null,alt:null},
+      light: null,
+    };
+
+    const gpsBox = document.getElementById("gpsBox");
+    const accelBox = document.getElementById("accelBox");
+    const gyroBox = document.getElementById("gyroBox");
+    const orientBox = document.getElementById("orientBox");
+    const lightBox = document.getElementById("lightBox");
+
+    document.getElementById("status").textContent = "Awaiting permissions...";
+
+    // ---- Location ----
+    if ("geolocation" in navigator) {
+      navigator.geolocation.watchPosition(pos => {
+        state.gps = {
+          lat: pos.coords.latitude,
+          lon: pos.coords.longitude,
+          speed: pos.coords.speed,
+          alt: pos.coords.altitude,
+        };
+      }, err => console.warn("GPS error:", err), { enableHighAccuracy: true });
+    }
+
+    // ---- Motion sensors ----
+    window.addEventListener("devicemotion", e => {
+      state.accel = e.acceleration || {};
+      state.gyro = e.rotationRate || {};
+    });
+
+    // ---- Orientation (compass) ----
+    window.addEventListener("deviceorientationabsolute", e => {
+      state.orient = {alpha:e.alpha,beta:e.beta,gamma:e.gamma};
+    });
+
+    // ---- Ambient light (if supported) ----
+    try {
+      const sensor = new AmbientLightSensor();
+      sensor.onreading = () => { state.light = sensor.illuminance; };
+      sensor.start();
+    } catch(e) {
+      console.warn("AmbientLightSensor not supported:", e);
+    }
+
+    // ---- Periodic update ----
+    setInterval(() => {
+      gpsBox.textContent = `GPS → Lat: ${state.gps.lat?.toFixed(6)} | Lon: ${state.gps.lon?.toFixed(6)} | Speed: ${state.gps.speed?.toFixed(2)} m/s`;
+      accelBox.textContent = `Accel → x:${state.accel.x?.toFixed(2)} y:${state.accel.y?.toFixed(2)} z:${state.accel.z?.toFixed(2)}`;
+      gyroBox.textContent = `Gyro → α:${state.gyro.alpha?.toFixed(2)} β:${state.gyro.beta?.toFixed(2)} γ:${state.gyro.gamma?.toFixed(2)}`;
+      orientBox.textContent = `Compass → α:${state.orient.alpha?.toFixed(2)} β:${state.orient.beta?.toFixed(2)} γ:${state.orient.gamma?.toFixed(2)}`;
+      lightBox.textContent = `Light → ${state.light ? state.light.toFixed(2)+' lx' : 'N/A'}`;
+      document.getElementById("status").textContent = "Logging...";
+
+      const payload = {
+        timestamp: Date.now(),
+        ...state
+      };
+
+      // Send to server
+      fetch(SERVER_URL, {
+        method: "POST",
+        headers: {"Content-Type":"application/json"},
+        body: JSON.stringify(payload)
+      }).catch(() => {});
+    }, UPDATE_INTERVAL);
+  </script>
+</body>
+</html>
