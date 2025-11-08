@@ -1,0 +1,134 @@
+CODE-
+#include <Wire.h>
+
+
+byte MPU_addr; // MPU6050 I2C address (0x68 or 0x69)
+
+// --- Variables for acceleration, velocity, deceleration, lean angle ---
+float velocityX = 0, velocityY = 0, velocityZ = 0;
+float prevVelocityX = 0, prevVelocityY = 0, prevVelocityZ = 0;
+float totalDeceleration = 0;
+float leanAngle = 0;       // Lean angle in degrees
+unsigned long prevTime = 0;
+
+String vehicleType = "Aeroplane";
+
+void setup() {
+  Serial.begin(115200);
+  Wire.begin(D2, D1); // SDA, SCL for ESP8266
+
+  Serial.println("Scanning for MPU6050...");
+  for (byte address = 1; address < 127; address++) {
+    Wire.beginTransmission(address);
+    if (Wire.endTransmission() == 0) {
+      Serial.print("Device found at 0x");
+      Serial.println(address, HEX);
+      MPU_addr = address;
+      break;
+    }
+  }
+
+  if (MPU_addr == 0) {
+    Serial.println("No MPU6050 found! Check wiring.");
+    while (1);
+  }
+
+  // Wake up MPU6050 (clear sleep bit)
+  Wire.beginTransmission(MPU_addr);
+  Wire.write(0x6B);
+  Wire.write(0);
+  Wire.endTransmission(true);
+
+  Serial.println("MPU6050 Initialized Successfully!");
+  prevTime = millis();
+  delay(500);
+}
+
+void loop() {
+  unsigned long currTime = millis();
+  float dt = (currTime - prevTime) / 1000.0; // Time in seconds
+  prevTime = currTime;
+
+  // --- Read accelerometer and gyro data ---
+  Wire.beginTransmission(MPU_addr);
+  Wire.write(0x3B); // starting register for accelerometer
+  Wire.endTransmission(false);
+
+  Wire.requestFrom((uint8_t)MPU_addr, (size_t)14, true);
+
+  if (Wire.available() == 14) {
+    // Read raw data
+    int16_t AcX = Wire.read() << 8 | Wire.read();
+    int16_t AcY = Wire.read() << 8 | Wire.read();
+    int16_t AcZ = Wire.read() << 8 | Wire.read();
+    int16_t Tmp = Wire.read() << 8 | Wire.read();
+    int16_t GyX = Wire.read() << 8 | Wire.read();
+    int16_t GyY = Wire.read() << 8 | Wire.read();
+    int16_t GyZ = Wire.read() << 8 | Wire.read();
+
+    // Convert raw acceleration to g
+    float ax = AcX / 16384.0;
+    float ay = AcY / 16384.0;
+    float az = AcZ / 16384.0;
+
+    // Convert raw gyro to deg/s
+    float gx = GyX / 131.0;
+    float gy = GyY / 131.0;
+    float gz = GyZ / 131.0;
+
+    // --- Integrate acceleration to get velocity ---
+    velocityX += ax * 9.81 * dt;
+    velocityY += ay * 9.81 * dt;
+    velocityZ += az * 9.81 * dt;
+
+    // --- Calculate deceleration ---
+    totalDeceleration = sqrt(
+      pow(prevVelocityX - velocityX, 2) +
+      pow(prevVelocityY - velocityY, 2) +
+      pow(prevVelocityZ - velocityZ, 2)
+    );
+
+    // Update previous velocities
+    prevVelocityX = velocityX;
+    prevVelocityY = velocityY;
+    prevVelocityZ = velocityZ;
+
+    // --- Calculate total acceleration magnitude ---
+    float accMag = sqrt(ax*ax + ay*ay + az*az);
+
+    // --- Estimate lean angle using complementary filter ---
+    float accLean = atan2(-ax, sqrt(ay*ay + az*az)) * 180 / PI; // accel angle
+    leanAngle = 0.98 * (leanAngle + gy * dt) + 0.02 * accLean;   // combine gyro Y with accel
+
+    // --- Vehicle classification based on lean angle + acceleration ---
+    if (accMag < 0.4 && leanAngle < 10) {
+      vehicleType = "Walking";
+    } else if (accMag >= 0.4 && accMag <= 0.8 && leanAngle < 25) {
+      vehicleType = "Scooter";
+    } else if (accMag > 0.8 && leanAngle >= 20) {
+      vehicleType = "Motorcycle";
+    } else {
+      vehicleType = "Aeroplane";
+    }
+
+    // --- Print all values ---
+    Serial.print("aX="); Serial.print(ax, 2);
+    Serial.print(" | aY="); Serial.print(ay, 2);
+    Serial.print(" | aZ="); Serial.print(az, 2);
+
+    Serial.print(" | VelocityX="); Serial.print(velocityX, 2);
+    Serial.print(" | VelocityY="); Serial.print(velocityY, 2);
+    Serial.print(" | VelocityZ="); Serial.print(velocityZ, 2);
+
+    Serial.print(" | TotalDeceleration="); Serial.print(totalDeceleration, 2);
+    Serial.print(" | LeanAngle="); Serial.print(leanAngle, 1);
+    Serial.print(" | AccMag="); Serial.print(accMag, 2);
+    Serial.print(" | VehicleType="); Serial.println(vehicleType);
+
+    Serial.println("------------------------------");
+  } else {
+    Serial.println("Data not ready or read error!");
+  }
+
+  delay(200); // Adjust sampling rate
+}
