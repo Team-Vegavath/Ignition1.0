@@ -1,0 +1,391 @@
+// --- HACKATHON MASTER CODE: "The Igniters" ---
+
+// LIBRARIES
+#include <Wire.h>
+#include <Adafruit_MPU6050.h>
+#include <Adafruit_Sensor.h>
+#include <TinyGPS++.h>
+#include <HardwareSerial.h>
+#include <BLEDevice.h>
+#include <BLEServer.h>
+#include <BLEUtils.h>
+#include <BLE2902.h>
+
+// --- CONFIGURATION ---
+#define TEAM_NAME "The Igniters"
+#define SERVICE_UUID        "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
+#define CHARACTERISTIC_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
+
+// --- SENSOR OBJECTS ---
+Adafruit_MPU6050 mpu;
+TinyGPSPlus gps;
+HardwareSerial gpsSerial(2); // GPIO 16=RX, 17=TX
+
+// --- GLOBAL VARIABLES ---
+bool deviceConnected = false;
+BLECharacteristic* pCharacteristic = NULL;
+char dataPacket[100]; // Holds the data string
+
+// --- BLE CONNECTION MANAGER ---
+class MyServerCallbacks: public BLEServerCallbacks {
+    void onConnect(BLEServer* pServer) {
+      deviceConnected = true;
+      Serial.println("App Connected!");
+    }
+    void onDisconnect(BLEServer* pServer) {
+      deviceConnected = false;
+      Serial.println("App Disconnected. Restarting advertising...");
+      pServer->getAdvertising()->start();
+    }
+};
+
+// --- SETUP (Runs Once) ---
+void setup() {
+  Serial.begin(115200); // For debugging
+  Serial.println("Booting Master Firmware...");
+
+  // 1. START MPU-6050 (MOTION SENSOR)
+  Wire.begin(21, 22); // SDA=21, SCL=22
+  if (!mpu.begin()) {
+    Serial.println("--- CRITICAL ERROR ---");
+    Serial.println("MPU6050 NOT FOUND! Check VCC, GND, SCL, SDA wires.");
+    while (1) { delay(10); } // Stop forever
+  }
+  Serial.println("MPU6050 (Motion) Ready.");
+
+  // 2. START GPS (POSITION SENSOR)
+  // Connect GPS TX to ESP32 Pin 16 (RX2)
+  // Connect GPS RX to ESP32 Pin 17 (TX2)
+  gpsSerial.begin(9600, SERIAL_8N1, 16, 17);
+  Serial.println("GPS (Position) Ready.");
+
+  // 3. START BLUETOOTH (BLE)
+  BLEDevice::init(TEAM_NAME);
+  BLEServer *pServer = BLEDevice::createServer();
+  pServer->setCallbacks(new MyServerCallbacks());
+  BLEService *pService = pServer->createService(SERVICE_UUID);
+  pCharacteristic = pService->createCharacteristic(
+                      CHARACTERISTIC_UUID,
+                      BLECharacteristic::PROPERTY_NOTIFY // Only need to notify
+                    );
+  pCharacteristic->addDescriptor(new BLE2902()); // Adds ability to be "subscribed" to
+  pService->start();
+  BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
+  pAdvertising->addServiceUUID(SERVICE_UUID);
+  pAdvertising->setScanResponse(true);
+  BLEDevice::startAdvertising();
+  Serial.println("Bluetooth Ready. Waiting for App connection...");
+  Serial.println("---------------------------------------");
+}
+
+// --- LOOP (Runs Forever) ---
+void loop() {
+  
+  // --- 1. ALWAYS READ GPS ---
+  // This reads all available data from the GPS module
+  while (gpsSerial.available() > 0) {
+    gps.encode(gpsSerial.read());
+  }
+
+  // --- 2. READ SENSOR VALUES ---
+  sensors_event_t a, g, temp;
+  mpu.getEvent(&a, &g, &temp);
+
+  // Get all 6 required values
+  float lat_val = gps.location.isValid() ? gps.location.lat() : 0.0;
+  float lon_val = gps.location.isValid() ? gps.location.lng() : 0.0;
+  float ax_val = a.acceleration.x;
+  float ay_val = a.acceleration.y;
+  float az_val = a.acceleration.z;
+  float speed_val = gps.speed.isValid() ? gps.speed.kmph() : 0.0;
+
+  // --- 3. FORMAT DATA PACKET (6 ITEMS) ---
+  // Format: "LAT,LON,AX,AY,AZ,SPEED"
+  sprintf(dataPacket, "%.6f,%.6f,%.2f,%.2f,%.2f,%.2f",
+          lat_val,
+          lon_val,
+          ax_val,
+          ay_val,
+          az_val,
+          speed_val
+         );
+
+  // --- 4. SEND DATA VIA BLE ---
+  if (deviceConnected) {
+    pCharacteristic->setValue(dataPacket);
+    pCharacteristic->notify(); // Send to phone
+    Serial.println(dataPacket); // Print to debug monitor
+  }
+  
+  delay(100); // Send 10 updates per second
+}
+
+
+
+#include <Wire.h>
+
+// MPU6050 I2C address
+#define MPU6050_ADDR 0x68
+
+// MPU6050 Registers
+#define PWR_MGMT_1    0x6B
+#define ACCEL_XOUT_H  0x3B
+#define GYRO_XOUT_H   0x43
+
+void setup() {
+  Serial.begin(115200);
+  Wire.begin(21, 22);  // SDA=21, SCL=22 for ESP32
+  delay(100);
+  
+  // Wake up MPU6050
+  writeRegister(PWR_MGMT_1, 0x00);
+  delay(100);
+  
+  Serial.println("MPU6050 initialized");
+}
+
+void loop() {
+  int16_t ax, ay, az;
+  int16_t gx, gy, gz;
+  
+  // Read accelerometer data
+  Wire.beginTransmission(MPU6050_ADDR);
+  Wire.write(ACCEL_XOUT_H);
+  Wire.endTransmission(false);
+  Wire.requestFrom(MPU6050_ADDR, 6, true);
+  
+  ax = (Wire.read() << 8) | Wire.read();
+  ay = (Wire.read() << 8) | Wire.read();
+  az = (Wire.read() << 8) | Wire.read();
+  
+  // Read gyroscope data
+  Wire.beginTransmission(MPU6050_ADDR);
+  Wire.write(GYRO_XOUT_H);
+  Wire.endTransmission(false);
+  Wire.requestFrom(MPU6050_ADDR, 6, true);
+  
+  gx = (Wire.read() << 8) | Wire.read();
+  gy = (Wire.read() << 8) | Wire.read();
+  gz = (Wire.read() << 8) | Wire.read();
+  
+  // Convert to meaningful values
+  float accel_x = ax / 16384.0;  // ±2g range
+  float accel_y = ay / 16384.0;
+  float accel_z = az / 16384.0;
+  
+  float gyro_x = gx / 131.0;  // ±250°/s range
+  float gyro_y = gy / 131.0;
+  float gyro_z = gz / 131.0;
+  
+  // Print data
+  Serial.print("Accel X: "); Serial.print(accel_x);
+  Serial.print(" Y: "); Serial.print(accel_y);
+  Serial.print(" Z: "); Serial.println(accel_z);
+  
+  Serial.print("Gyro X: "); Serial.print(gyro_x);
+  Serial.print(" Y: "); Serial.print(gyro_y);
+  Serial.print(" Z: "); Serial.println(gyro_z);
+  
+  Serial.println("---");
+  delay(500);
+}
+
+void writeRegister(uint8_t reg, uint8_t value) {
+  Wire.beginTransmission(MPU6050_ADDR);
+  Wire.write(reg);
+  Wire.write(value);
+  Wire.endTransmission(true);
+}
+
+uint8_t readRegister(uint8_t reg) {
+  Wire.beginTransmission(MPU6050_ADDR);
+  Wire.write(reg);
+  Wire.endTransmission(false);
+  Wire.requestFrom(MPU6050_ADDR, 1, true);
+  return Wire.read();
+}
+
+
+/*******************************************************
+ * ESP32 + MPU6050 → Firebase Realtime Database
+ * Works with or without Authentication (toggle USE_AUTH)
+ * 
+ * Libraries (Arduino IDE → Manage Libraries):
+ * - Firebase ESP Client (by Mobizt)
+ * - Wire (built-in)
+ *
+ * Firebase Realtime Database Rules:
+ *  - Secure (recommended):
+ *    {
+ *      "rules": {
+ *        ".read": "auth != null",
+ *        ".write": "auth != null"
+ *      }
+ *    }
+ *  - No-auth (testing only):
+ *    {
+ *      "rules": {
+ *        ".read": true,
+ *        ".write": true
+ *      }
+ *    }
+ *******************************************************/
+
+#include <WiFi.h>
+#include <Wire.h>
+#include <Firebase_ESP_Client.h>   // Mobizt
+
+/************* CONFIG SWITCH *************/
+#define USE_AUTH 1   // 1 = use Email/Password auth; 0 = no auth (open rules)
+/*/
+
+/************* YOUR SECRETS *************/
+#define WIFI_SSID       "OnePlus Nord CE4"
+#define WIFI_PASSWORD   "12345678"
+
+// Firebase console → Project settings (gear) → General → Web API key
+#define API_KEY         ""AIzaSyBOPWQuN1ywSShn0prbC5XHmemwf_AsI-4""
+
+// Realtime DB URL: looks like
+// https://<project-id>-default-rtdb.<region>.firebasedatabase.app
+#define DATABASE_URL    ""https://sensor-54f02-default-rtdb.firebaseio.com""
+
+// Only needed if USE_AUTH == 1
+#define USER_EMAIL      "dhiyananujum09@gmail.com"
+#define USER_PASSWORD   "Mu$cles123"
+//
+
+/************* MPU6050 DEFINES **********/
+#define MPU6050_ADDR   0x68
+#define PWR_MGMT_1     0x6B
+#define ACCEL_XOUT_H   0x3B
+#define GYRO_XOUT_H    0x43
+//
+
+// Firebase globals
+FirebaseData fbdo;
+FirebaseAuth auth;
+FirebaseConfig config;
+
+String deviceId = "esp32-01";          // Change if multiple devices
+unsigned long lastPostMs = 0;
+const unsigned long postEveryMs = 200;  // ~5 Hz writes
+
+/************* UTIL: I2C helpers ********/
+static void writeRegister(uint8_t reg, uint8_t value) {
+  Wire.beginTransmission(MPU6050_ADDR);
+  Wire.write(reg);
+  Wire.write(value);
+  Wire.endTransmission(true);
+}
+
+static bool readMPU(float &ax_g, float &ay_g, float &az_g,
+                    float &gx_dps, float &gy_dps, float &gz_dps) {
+  int16_t ax, ay, az, gx, gy, gz;
+
+  // Accel
+  Wire.beginTransmission(MPU6050_ADDR);
+  Wire.write(ACCEL_XOUT_H);
+  if (Wire.endTransmission(false) != 0) return false;
+  if (Wire.requestFrom(MPU6050_ADDR, 6, true) != 6) return false;
+  ax = (Wire.read() << 8) | Wire.read();
+  ay = (Wire.read() << 8) | Wire.read();
+  az = (Wire.read() << 8) | Wire.read();
+
+  // Gyro
+  Wire.beginTransmission(MPU6050_ADDR);
+  Wire.write(GYRO_XOUT_H);
+  if (Wire.endTransmission(false) != 0) return false;
+  if (Wire.requestFrom(MPU6050_ADDR, 6, true) != 6) return false;
+  gx = (Wire.read() << 8) | Wire.read();
+  gy = (Wire.read() << 8) | Wire.read();
+  gz = (Wire.read() << 8) | Wire.read();
+
+  // Convert to physical units (±2g and ±250 dps)
+  ax_g = ax / 16384.0f;  ay_g = ay / 16384.0f;  az_g = az / 16384.0f;
+  gx_dps = gx / 131.0f;  gy_dps = gy / 131.0f;  gz_dps = gz / 131.0f;
+
+  return true;
+}
+
+/************* SETUP *************/
+void setup() {
+  Serial.begin(115200);
+  delay(100);
+
+  // Wi-Fi
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  Serial.print("WiFi connecting");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(300);
+    Serial.print(".");
+  }
+  Serial.println();
+  Serial.print("WiFi connected, IP: ");
+  Serial.println(WiFi.localIP());
+
+  // Firebase config
+  config.api_key = API_KEY;
+  config.database_url = DATABASE_URL;
+
+#if USE_AUTH
+  // Email/Password sign-in
+  auth.user.email = USER_EMAIL;
+  auth.user.password = USER_PASSWORD;
+#else
+  // No auth: leave auth empty, make sure your DB rules are open (true/true)
+#endif
+
+  Firebase.reconnectNetwork(true);
+  Firebase.begin(&config, &auth);
+
+  // I2C + MPU6050 init
+  Wire.begin(21, 22);      // ESP32 default SDA=21, SCL=22
+  Wire.setClock(400000);   // Fast I2C
+  delay(100);
+  writeRegister(PWR_MGMT_1, 0x00); // wake up
+  delay(100);
+
+  Serial.println("Setup complete. Streaming to Firebase...");
+}
+
+/************* LOOP *************/
+void loop() {
+  float ax, ay, az, gx, gy, gz;
+
+  if (!readMPU(ax, ay, az, gx, gy, gz)) {
+    Serial.println("MPU read failed");
+    delay(50);
+    return;
+  }
+
+  unsigned long now = millis();
+
+  if (Firebase.ready() && (now - lastPostMs >= postEveryMs)) {
+    lastPostMs = now;
+
+    // Build JSON row
+    FirebaseJson json;
+    json.set("ts_ms", (int64_t) now);
+    json.set("ax_g", ax);
+    json.set("ay_g", ay);
+    json.set("az_g", az);
+    json.set("gx_dps", gx);
+    json.set("gy_dps", gy);
+    json.set("gz_dps", gz);
+
+    // Path: /devices/<deviceId>/readings (push creates a unique key)
+    String path = "/devices/" + deviceId + "/readings";
+
+    if (!Firebase.RTDB.pushJSON(&fbdo, path.c_str(), &json)) {
+      Serial.printf("Firebase push failed: %s\n", fbdo.errorReason().c_str());
+    } else {
+      // Optionally print the key:
+      // Serial.println(fbdo.pushName());
+    }
+  }
+
+  delay(5); // small yield
+}
+
+
