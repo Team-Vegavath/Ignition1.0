@@ -1,0 +1,38 @@
+{
+  "expo": {
+    "name": "Rider Telemetry System",
+    "slug": "rider-telemetry-mobile",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "splash": {
+      "resizeMode": "contain",
+      "backgroundColor": "#111827"
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "This app needs location access to track your ride GPS coordinates.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "This app needs location access to track your ride GPS coordinates."
+      }
+    },
+      "android": {
+        "adaptiveIcon": {
+          "backgroundColor": "#111827"
+        },
+        "permissions": [
+          "ACCESS_FINE_LOCATION",
+          "ACCESS_COARSE_LOCATION",
+          "INTERNET"
+        ],
+        "package": "com.ridertelemetry.app"
+      },
+    "web": {
+    },
+    "plugins": []
+  }
+}
+
