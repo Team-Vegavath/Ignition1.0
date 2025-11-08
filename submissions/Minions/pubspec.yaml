@@ -1,0 +1,53 @@
+name: rider_telemetry_app
+description: "Rider Telemetry App"
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.9.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # UI & Icons
+  cupertino_icons: ^1.0.8
+
+  # Sensors & Location
+  sensors_plus: ^4.0.2
+  geolocator: ^10.1.0
+
+  # Database
+  sqflite: ^2.3.3
+  path_provider: ^2.1.4
+  vector_math: ^2.1.4
+
+  # Charts & Data Display
+  intl: ^0.19.0
+  fl_chart: ^0.68.0
+
+  # Maps
+  flutter_map: ^6.1.0
+  latlong2: ^0.9.1
+  pdf: ^3.11.0
+  printing: ^5.12.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
+
+  assets:
+    - assets/fonts/
+
+  fonts:
+    - family: Orbitron
+      fonts:
+        - asset: assets/fonts/Orbitron-VariableFont_wght.ttf
+    - family: Exo2
+      fonts:
+        - asset: assets/fonts/Exo2-VariableFont_wght.ttf
+        - asset: assets/fonts/Exo2-Italic-VariableFont_wght.ttf
